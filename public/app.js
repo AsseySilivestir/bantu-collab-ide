@@ -39,7 +39,7 @@ const nameInput = document.getElementById('name-input');
 const myAvatar = document.getElementById('my-avatar');
 
 const colors = ['#6c5ce7','#00d4a0','#ff6b81','#ffa502','#3742fa','#a29bfe','#fd79a8','#55efc4'];
-function colorFor(id) { return colors[(id || '').charCodeAt(id.length-1) || 0) % colors.length]; }
+function colorFor(id) { return colors[((id || '').charCodeAt((id || '').length-1) || 0) % colors.length]; }
 function initials(name) { return (name || '?').substring(0,2).toUpperCase(); }
 
 function addChatMessage(type, name, text) {
