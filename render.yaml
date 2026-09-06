@@ -1,6 +1,3 @@
-# Render Blueprint — Bantu Collaborative IDE
-# Docs: https://render.com/docs/blueprint-spec
-#
 services:
   - type: web
     name: bantu-collab-ide
@@ -11,3 +8,8 @@ services:
     dockerContext: .
     healthCheckPath: /api/health
     autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: HOST
+        value: "0.0.0.0"

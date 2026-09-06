@@ -96,7 +96,7 @@ sua.server.get("/api/health", def($req, $res) {
 
 // ─── Start ────────────────────────────────────────────────────────
 string $port = env("PORT");
-if (!$port) { $port = "8080"; }
+if (!$port) { $port = "10000"; }
 
 print "";
 print "========================================";
