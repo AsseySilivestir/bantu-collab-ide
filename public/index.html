@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bantu Collaborative IDE</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- CodeMirror from CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closetag.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- ─── Sidebar: chat + users + voice ─────────────────── -->
+        <div id="sidebar">
+            <div id="header">
+                <h1>Bantu IDE</h1>
+                <span id="connection-status" class="status disconnected">●</span>
+            </div>
+
+            <div id="user-section">
+                <input type="text" id="name-input" placeholder="Your name..." maxlength="20">
+            </div>
+
+            <div id="voice-section">
+                <button id="mic-btn" title="Toggle voice">
+                    🎤 <span id="mic-label">Start Voice</span>
+                </button>
+                <div id="voice-indicators"></div>
+            </div>
+
+            <div id="users-list">
+                <h3>Online</h3>
+                <ul id="users"></ul>
+            </div>
+
+            <div id="chat-section">
+                <div id="chat-messages"></div>
+                <div id="chat-input-row">
+                    <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                    <button id="chat-send">➤</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Main: code editor ──────────────────────────────── -->
+        <div id="editor-section">
+            <div id="editor-toolbar">
+                <select id="language-select">
+                    <option value="javascript">JavaScript</option>
+                    <option value="python">Python</option>
+                    <option value="htmlmixed">HTML</option>
+                    <option value="css">CSS</option>
+                </select>
+                <span id="cursor-positions"></span>
+            </div>
+            <textarea id="code-editor"></textarea>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
