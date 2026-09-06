@@ -147,16 +147,17 @@ function addVoiceMessage(type, name, blob, duration) {
         barsHtml += `<div class="bar" style="height:${h}px"></div>`;
     }
     div.innerHTML = `
-        <button class="play-btn" onclick="this._play(this)">▶</button>
+        <button class="play-btn">▶</button>
         <div class="waveform">${barsHtml}</div>
         <span class="duration">${m}:${s}</span>
     `;
     div._audio = new Audio(url);
-    div._play = (btn) => {
+    const playBtn = div.querySelector('.play-btn');
+    playBtn.addEventListener('click', () => {
         const audio = div._audio;
         if (audio.paused) {
             audio.play();
-            btn.textContent = '⏸';
+            playBtn.textContent = '⏸';
             const bars = div.querySelectorAll('.bar');
             let i = 0;
             const interval = setInterval(() => {
@@ -164,12 +165,12 @@ function addVoiceMessage(type, name, blob, duration) {
                 i++;
                 if (i >= bars.length) clearInterval(interval);
             }, (duration * 1000) / bars.length);
-            audio.onended = () => { btn.textContent = '▶'; bars.forEach(b => b.classList.remove('played')); };
+            audio.onended = () => { playBtn.textContent = '▶'; bars.forEach(b => b.classList.remove('played')); };
         } else {
             audio.pause();
-            btn.textContent = '▶';
+            playBtn.textContent = '▶';
         }
-    };
+    });
     
     if (type === 'received') {
         const fromDiv = document.createElement('span');
@@ -266,7 +267,7 @@ editor.on('change', (inst) => {
             send({ type: 'code-edit', content: content });
             lastSentContent = content;
         }
-    }, 300);
+    }, 150);
 });
 
 editor.on('cursorActivity', (inst) => {
