@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.git
+.env*
+Dockerfile
+render.yaml
