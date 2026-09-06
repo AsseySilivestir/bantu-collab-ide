@@ -1,6 +1,4 @@
 # Bantu Collaborative IDE — Multi-stage Dockerfile for Render
-# Stage 1: build Bantu v1.3.2 from source
-# Stage 2: runtime — Bantu binary + IDE app
 
 FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
@@ -23,10 +21,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 ca-certificates libcurl4 libffi8 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+
+# Copy the Bantu binary
 COPY --from=builder /build/bantu /usr/local/bin/bantu
 RUN chmod +x /usr/local/bin/bantu
+
+# Copy the app — force cache invalidation with ARG
+ARG CACHE_BUST=1
 COPY server.b /app/server.b
 COPY public/ /app/public/
+
+# Verify Bantu works
 RUN /usr/local/bin/bantu --version
+
 EXPOSE 10000
 CMD ["bantu", "run", "server.b"]
