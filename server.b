@@ -1,4 +1,5 @@
-// Bantu Collaborative IDE v1.3.2 — chat + voice + code editing
+// Bantu Collaborative IDE v1.3.2
+// Chat + Voice + Real-time Code Editing via sua.ws WebSocket
 
 print "=========================================";
 print "  Bantu Collaborative IDE v1.3.2";
@@ -14,7 +15,7 @@ sua.ws.on("connect", def($client) {
 });
 
 sua.ws.on("message", def($msg) {
-    // If not JSON, broadcast raw
+    // If no JSON, broadcast raw
     if (!$msg.json) {
         sua.ws.broadcast($msg.data);
         return;
@@ -22,62 +23,58 @@ sua.ws.on("message", def($msg) {
 
     string $type = $msg.json.type;
 
-    // Chat message — relay to everyone
+    // Chat — broadcast to everyone (including sender for echo)
     if ($type == "chat") {
-        sua.ws.broadcast(json.stringify({
-            "type": "chat",
-            "name": $msg.json.name,
-            "text": $msg.json.text
-        }));
+        sua.ws.broadcast($msg.data);
     }
 
-    // Set name
+    // Set name — broadcast to everyone
     if ($type == "set-name") {
-        sua.ws.broadcast(json.stringify({
-            "type": "name-change",
-            "id": $msg.client,
-            "name": $msg.json.name
-        }));
+        sua.ws.broadcast($msg.data);
     }
 
-    // Code edit — relay to all OTHER clients
+    // Code edit — relay to all OTHER clients (not sender)
     if ($type == "code-edit") {
         list $all = sua.ws.clients();
         number $i = 0;
         while ($i < len($all)) {
             if ($all[$i] != $msg.client) {
-                sua.ws.send($all[$i], json.stringify({
-                    "type": "code-edit",
-                    "changes": $msg.json.changes
-                }));
+                sua.ws.send($all[$i], $msg.data);
             }
             $i = $i + 1;
         }
     }
 
-    // Cursor position — relay to others
+    // Cursor — relay to all OTHER clients
     if ($type == "cursor") {
         list $all = sua.ws.clients();
         number $i = 0;
         while ($i < len($all)) {
             if ($all[$i] != $msg.client) {
-                sua.ws.send($all[$i], json.stringify({
-                    "type": "cursor",
-                    "from": $msg.client,
-                    "line": $msg.json.line,
-                    "ch": $msg.json.ch
-                }));
+                sua.ws.send($all[$i], $msg.data);
             }
             $i = $i + 1;
         }
     }
 
-    // Voice start/stop
+    // Voice start/stop — broadcast to everyone
     if ($type == "voice-start") {
-        sua.ws.broadcast(json.stringify({"type": "voice-start", "id": $msg.client}));
+        sua.ws.broadcast($msg.data);
     }
     if ($type == "voice-stop") {
-        sua.ws.broadcast(json.stringify({"type": "voice-stop", "id": $msg.client}));
+        sua.ws.broadcast($msg.data);
+    }
+
+    // Binary voice data — relay to all OTHER clients
+    if ($msg.binary) {
+        list $all = sua.ws.clients();
+        number $i = 0;
+        while ($i < len($all)) {
+            if ($all[$i] != $msg.client) {
+                sua.ws.send_binary($all[$i], $msg.bytes);
+            }
+            $i = $i + 1;
+        }
     }
 });
 
