@@ -4,7 +4,9 @@
 // ════════════════════════════════════════════════════════════════════
 
 // ─── WebSocket connection ──────────────────────────────────────────
-const ws = new WebSocket(`ws://${location.host}/`);
+// Use wss:// when on HTTPS (Render forces HTTPS), ws:// for localhost
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${wsProtocol}//${location.host}/`);
 ws.binaryType = 'arraybuffer';  // for voice data
 
 const statusEl = document.getElementById('connection-status');
