@@ -1,153 +1,107 @@
-// ════════════════════════════════════════════════════════════════════
-//  Bantu Collaborative IDE — chat + voice + real-time code editing
-//  ════════════════════════════════════════════════════════════════════
-//
-//  Features:
-//    • Real-time chat (WebSocket text messages)
-//    • Voice transmission (WebSocket binary frames — audio chunks)
-//    • Collaborative code editing (CodeMirror synced via WebSocket)
-//    • Multiple participants see each other's cursors + edits live
-//
-//  All powered by Bantu v1.3.2 + sua.ws (WebSocket) + sua.ws.send_binary
-// ════════════════════════════════════════════════════════════════════
+// Bantu Collaborative IDE v1.3.2 — chat + voice + code editing
 
-print "═════════════════════════════════════════════";
+print "=========================================";
 print "  Bantu Collaborative IDE v1.3.2";
 print "  Chat + Voice + Real-time Code Editing";
-print "═════════════════════════════════════════════";
+print "=========================================";
 
-// ─── WebSocket event handlers ──────────────────────────────────────
-
-dict $clients = {};  // clientId → {name, hasVoice}
+// ─── WebSocket handlers ────────────────────────────────────────────
 
 sua.ws.on("connect", def($client) {
-    print "[WS] Client connected: " + $client.id;
-    $clients[$client.id] = {"name": "guest", "hasVoice": false};
-    // Send current user list
+    print "[WS] Connected: " + $client.id;
     sua.ws.send($client.id, json.stringify({"type": "welcome", "id": $client.id}));
     sua.ws.broadcast(json.stringify({"type": "user-joined", "id": $client.id}));
 });
 
 sua.ws.on("message", def($msg) {
-    // Parse the JSON message
-    dict $json = $msg.json;
-    if (!$json) {
-        // Not JSON — treat as plain chat message
-        sua.ws.broadcast(json.stringify({
-            "type": "chat",
-            "from": $msg.client,
-            "text": $msg.data
-        }));
+    // If not JSON, broadcast raw
+    if (!$msg.json) {
+        sua.ws.broadcast($msg.data);
         return;
     }
 
-    string $type = $json.type;
+    string $type = $msg.json.type;
 
-    // Chat message
+    // Chat message — relay to everyone
     if ($type == "chat") {
         sua.ws.broadcast(json.stringify({
             "type": "chat",
-            "from": $msg.client,
-            "name": $json.name,
-            "text": $json.text
+            "name": $msg.json.name,
+            "text": $msg.json.text
         }));
     }
 
     // Set name
     if ($type == "set-name") {
-        $clients[$msg.client].name = $json.name;
         sua.ws.broadcast(json.stringify({
             "type": "name-change",
             "id": $msg.client,
-            "name": $json.name
+            "name": $msg.json.name
         }));
     }
 
-    // Code edit (delta)
+    // Code edit — relay to all OTHER clients
     if ($type == "code-edit") {
-        // Broadcast to all OTHER clients
-        list $allClients = sua.ws.clients();
+        list $all = sua.ws.clients();
         number $i = 0;
-        while ($i < len($allClients)) {
-            if ($allClients[$i] != $msg.client) {
-                sua.ws.send($allClients[$i], json.stringify({
+        while ($i < len($all)) {
+            if ($all[$i] != $msg.client) {
+                sua.ws.send($all[$i], json.stringify({
                     "type": "code-edit",
-                    "from": $msg.client,
-                    "changes": $json.changes
+                    "changes": $msg.json.changes
                 }));
             }
             $i = $i + 1;
         }
     }
 
-    // Cursor position
+    // Cursor position — relay to others
     if ($type == "cursor") {
-        list $allClients = sua.ws.clients();
+        list $all = sua.ws.clients();
         number $i = 0;
-        while ($i < len($allClients)) {
-            if ($allClients[$i] != $msg.client) {
-                sua.ws.send($allClients[$i], json.stringify({
+        while ($i < len($all)) {
+            if ($all[$i] != $msg.client) {
+                sua.ws.send($all[$i], json.stringify({
                     "type": "cursor",
                     "from": $msg.client,
-                    "line": $json.line,
-                    "ch": $json.ch
+                    "line": $msg.json.line,
+                    "ch": $msg.json.ch
                 }));
             }
             $i = $i + 1;
         }
     }
 
-    // Voice start
+    // Voice start/stop
     if ($type == "voice-start") {
-        $clients[$msg.client].hasVoice = true;
-        sua.ws.broadcast(json.stringify({
-            "type": "voice-start",
-            "id": $msg.client,
-            "name": $clients[$msg.client].name
-        }));
+        sua.ws.broadcast(json.stringify({"type": "voice-start", "id": $msg.client}));
     }
-
-    // Voice stop
     if ($type == "voice-stop") {
-        $clients[$msg.client].hasVoice = false;
-        sua.ws.broadcast(json.stringify({
-            "type": "voice-stop",
-            "id": $msg.client
-        }));
+        sua.ws.broadcast(json.stringify({"type": "voice-stop", "id": $msg.client}));
     }
 });
 
 sua.ws.on("disconnect", def($client) {
-    print "[WS] Client left: " + $client.id;
-    // Remove from clients dict (set to null — Bantu dicts can't delete)
-    $clients[$client.id] = null;
-    sua.ws.broadcast(json.stringify({
-        "type": "user-left",
-        "id": $client.id
-    }));
+    print "[WS] Left: " + $client.id;
+    sua.ws.broadcast(json.stringify({"type": "user-left", "id": $client.id}));
 });
 
-// ─── Serve the IDE frontend ────────────────────────────────────────
+// ─── Static frontend ───────────────────────────────────────────────
 sua.server.static("./public");
 
-// ─── Health check endpoint (for Render) ───────────────────────────
+// ─── Health check ─────────────────────────────────────────────────
 sua.server.get("/api/health", def($req, $res) {
     $res.json({"status": "ok", "version": "1.3.2", "ws": true});
 });
 
 // ─── Start ────────────────────────────────────────────────────────
-// Render automatically sets the PORT env var. Read it.
 string $port = env("PORT");
 if (!$port) { $port = "8080"; }
 
 print "";
-print "════════════════════════════════════════════════════════════════";
-print "  Bantu Collaborative IDE ready on port " + $port;
-print "";
-print "  Open http://localhost:" + $port + " in 2+ browser tabs";
-print "  • Chat: type in the chat box + Enter";
-print "  • Voice: click the mic button to start/stop";
-print "  • Code: edit in the CodeMirror editor — changes sync live";
-print "════════════════════════════════════════════════════════════════";
+print "========================================";
+print "  Ready on port " + $port;
+print "  Open http://localhost:" + $port;
+print "========================================";
 
 sua.server.listen(num($port));
