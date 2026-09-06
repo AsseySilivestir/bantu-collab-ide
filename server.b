@@ -1,12 +1,14 @@
-// Bantu Collaborative IDE v1.3.2
+// Splannes Thumb Pal — Bantu Collaborative IDE v1.3.2
 // Chat + Voice + Real-time Code Editing via sua.ws WebSocket
 
 print "=========================================";
-print "  Bantu Collaborative IDE v1.3.2";
+print "  Splannes Thumb Pal v1.3.2";
 print "  Chat + Voice + Real-time Code Editing";
 print "=========================================";
 
 // ─── WebSocket handlers ────────────────────────────────────────────
+// Note: binary voice frames are relayed at the C++ level (fast path).
+// Only text messages go through the Bantu handler.
 
 sua.ws.on("connect", def($client) {
     print "[WS] Connected: " + $client.id;
@@ -15,7 +17,7 @@ sua.ws.on("connect", def($client) {
 });
 
 sua.ws.on("message", def($msg) {
-    // If no JSON, broadcast raw
+    // Binary voice data is handled by C++ — we only get text here
     if (!$msg.json) {
         sua.ws.broadcast($msg.data);
         return;
@@ -23,17 +25,17 @@ sua.ws.on("message", def($msg) {
 
     string $type = $msg.json.type;
 
-    // Chat — broadcast to everyone (including sender for echo)
+    // Chat — broadcast to everyone
     if ($type == "chat") {
         sua.ws.broadcast($msg.data);
     }
 
-    // Set name — broadcast to everyone
+    // Set name — broadcast
     if ($type == "set-name") {
         sua.ws.broadcast($msg.data);
     }
 
-    // Code edit — relay to all OTHER clients (not sender)
+    // Code edit — relay to all OTHER clients
     if ($type == "code-edit") {
         list $all = sua.ws.clients();
         number $i = 0;
@@ -45,7 +47,7 @@ sua.ws.on("message", def($msg) {
         }
     }
 
-    // Cursor — relay to all OTHER clients
+    // Cursor — relay to others
     if ($type == "cursor") {
         list $all = sua.ws.clients();
         number $i = 0;
@@ -57,24 +59,12 @@ sua.ws.on("message", def($msg) {
         }
     }
 
-    // Voice start/stop — broadcast to everyone
+    // Voice start/stop — broadcast
     if ($type == "voice-start") {
         sua.ws.broadcast($msg.data);
     }
     if ($type == "voice-stop") {
         sua.ws.broadcast($msg.data);
-    }
-
-    // Binary voice data — relay to all OTHER clients
-    if ($msg.binary) {
-        list $all = sua.ws.clients();
-        number $i = 0;
-        while ($i < len($all)) {
-            if ($all[$i] != $msg.client) {
-                sua.ws.send_binary($all[$i], $msg.bytes);
-            }
-            $i = $i + 1;
-        }
     }
 });
 
@@ -88,7 +78,7 @@ sua.server.static("./public");
 
 // ─── Health check ─────────────────────────────────────────────────
 sua.server.get("/api/health", def($req, $res) {
-    $res.json({"status": "ok", "version": "1.3.2", "ws": true});
+    $res.json({"status": "ok", "version": "1.3.2", "app": "Splannes Thumb Pal"});
 });
 
 // ─── Start ────────────────────────────────────────────────────────

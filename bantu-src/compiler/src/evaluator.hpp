@@ -572,21 +572,21 @@ static void bantuHandleWebSocket(int sock, const std::string& wsKey) {
             continue;
         }
         if (opcode == 0x2) {  // Binary message (voice/audio data)
-            // Call the onMessage handler with isBinary=true and raw bytes
-            if (bantuWsOnMessage.isFunction() || bantuWsOnMessage.isNativeFn()) {
-                ObjectMap msgObj;
-                msgObj["data"] = Value(payload);   // raw string (may contain nulls)
-                msgObj["client"] = Value(client.id);
-                msgObj["binary"] = Value(true);
-                // Also pass as a byte list for Bantu-side processing
-                std::vector<Value> byteList;
-                for (char c : payload) byteList.push_back(Value((double)(uint8_t)c));
-                msgObj["bytes"] = Value(std::move(byteList));
-                if (bantuWsCallback) {
-                    try { bantuWsCallback(bantuWsOnMessage, {Value(std::move(msgObj))}); }
-                    catch (const std::exception& e) { std::cerr << "  [WS] onMessage(binary) error: " << e.what() << "\n"; }
+            // Relay binary data to all OTHER clients DIRECTLY in C++.
+            // This is critical for voice: going through the Bantu interpreter
+            // for every 4096-byte audio chunk would be too slow and cause
+            // disconnections. We relay at the C++ level, then optionally
+            // call the Bantu handler for logging/custom logic.
+            {
+                std::vector<uint8_t> binData(payload.begin(), payload.end());
+                for (auto& [id, otherClient] : bantuWsTable()) {
+                    if (otherClient.fd >= 0 && otherClient.id != client.id) {
+                        bantuWsSendBinary(otherClient.fd, binData);
+                    }
                 }
             }
+            // Don't call the Bantu handler for binary — too slow for voice.
+            // The C++ relay above handles it.
         }
         if (opcode == 0x1) {  // Text message
             std::cout << "  [WS] Message from " << client.id << ": " << payload << "\n";
