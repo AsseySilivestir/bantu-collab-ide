@@ -123,21 +123,35 @@ function addVoiceMessage(type, name, blob, duration) {
     const div = document.createElement('div');
     div.className = `voice-msg ${type}`;
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
 
-    // If duration is 0 or unknown, try to get it from the audio metadata
-    if (!duration || duration <= 0) {
-        duration = 0;
-        audio.addEventListener('loadedmetadata', () => {
-            // Some browsers give Infinity for blob duration; fall back to estimate
-            const d = audio.duration;
-            if (d && d !== Infinity) {
-                const m = Math.floor(d / 60);
-                const s = Math.floor(d % 60).toString().padStart(2, '0');
-                div.querySelector('.duration').textContent = `${m}:${s}`;
-            }
-        });
-    }
+    // Create an actual <audio> element in the DOM (more reliable than detached Audio)
+    const audio = document.createElement('audio');
+    audio.src = url;
+    audio.preload = 'auto';
+    audio.style.display = 'none';
+    div.appendChild(audio);
+
+    // Error handling
+    audio.addEventListener('error', (e) => {
+        console.error('Audio error:', audio.error);
+        console.error('Blob size:', blob.size, 'type:', blob.type);
+        div.querySelector('.duration').textContent = 'Error';
+    });
+
+    // Get duration from metadata when available
+    audio.addEventListener('loadedmetadata', () => {
+        const d = audio.duration;
+        if (d && d !== Infinity && d > 0) {
+            const m = Math.floor(d / 60);
+            const s = Math.floor(d % 60).toString().padStart(2, '0');
+            div.querySelector('.duration').textContent = `${m}:${s}`;
+        }
+    });
+
+    // Also try canplay event — some browsers need it
+    audio.addEventListener('canplaythrough', () => {
+        console.log('Audio can play, duration:', audio.duration);
+    });
 
     const m = Math.floor(duration / 60);
     const s = (duration % 60).toString().padStart(2, '0');
@@ -147,18 +161,41 @@ function addVoiceMessage(type, name, blob, duration) {
         const h = Math.floor(Math.random() * 16) + 4;
         barsHtml += `<div class="bar" style="height:${h}px"></div>`;
     }
-    div.innerHTML = `
+
+    const controlsDiv = document.createElement('div');
+    controlsDiv.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;';
+    controlsDiv.innerHTML = `
         <button class="play-btn">▶</button>
         <div class="waveform">${barsHtml}</div>
         <span class="duration">${m}:${s}</span>
     `;
+    div.insertBefore(controlsDiv, audio);
 
-    const playBtn = div.querySelector('.play-btn');
-    const bars = div.querySelectorAll('.bar');
+    const playBtn = controlsDiv.querySelector('.play-btn');
+    const bars = controlsDiv.querySelectorAll('.bar');
+
     playBtn.addEventListener('click', () => {
+        console.log('Play clicked, audio src:', audio.src.substring(0, 50));
+        console.log('Audio readyState:', audio.readyState);
         if (audio.paused) {
-            audio.play();
-            playBtn.textContent = '⏸';
+            // Force reload if not loaded yet
+            if (audio.readyState === 0) {
+                audio.load();
+            }
+            audio.play().then(() => {
+                console.log('Audio playing');
+                playBtn.textContent = '⏸';
+            }).catch(e => {
+                console.error('Play failed:', e);
+                // Try reloading
+                audio.load();
+                audio.play().then(() => {
+                    playBtn.textContent = '⏸';
+                }).catch(e2 => {
+                    console.error('Play still failed:', e2);
+                    alert('Cannot play audio: ' + e2.message);
+                });
+            });
             let i = 0;
             const interval = setInterval(() => {
                 if (i < bars.length) bars[i].classList.add('played');
