@@ -1,5 +1,5 @@
 // Splannes Thumb Pal — Collaborative IDE
-// Chat (text + voice messages) + Real-time Code Editing
+// Chat + Live Voice + Real-time Code Editing via WebSocket
 
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${wsProtocol}//${location.host}/`);
@@ -11,7 +11,7 @@ ws.onopen = () => { connDot.className = 'dot connected'; connText.textContent = 
 ws.onclose = () => { connDot.className = 'dot disconnected'; connText.textContent = 'Disconnected'; };
 ws.onerror = () => { connText.textContent = 'Error'; };
 ws.onmessage = (e) => {
-    if (e.data instanceof ArrayBuffer) { return; } // ignore binary (not used now)
+    if (e.data instanceof ArrayBuffer) { handleVoiceData(e.data); return; }
     try { handleMessage(JSON.parse(e.data)); }
     catch { addChatMessage('system', null, e.data); }
 };
@@ -30,15 +30,9 @@ function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&l
 
 function addChatMessage(type, name, text) {
     const div = document.createElement('div');
-    if (type === 'system') {
-        div.className = 'chat-msg system'; div.textContent = text;
-    } else if (type === 'sent') {
-        div.className = 'chat-msg sent';
-        div.innerHTML = `<span class="from">${escapeHtml(name)}</span>${escapeHtml(text)}`;
-    } else {
-        div.className = 'chat-msg received';
-        div.innerHTML = `<span class="from" style="color:${colorFor(name)}">${escapeHtml(name)}</span>${escapeHtml(text)}`;
-    }
+    if (type === 'system') { div.className = 'chat-msg system'; div.textContent = text; }
+    else if (type === 'sent') { div.className = 'chat-msg sent'; div.innerHTML = `<span class="from">${escapeHtml(name)}</span>${escapeHtml(text)}`; }
+    else { div.className = 'chat-msg received'; div.innerHTML = `<span class="from" style="color:${colorFor(name)}">${escapeHtml(name)}</span>${escapeHtml(text)}`; }
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -60,187 +54,86 @@ nameInput.addEventListener('input', () => {
     send({ type: 'set-name', name });
 });
 
-// ─── Voice messages via base64 text frames ─────
-// Instead of binary WebSocket frames (which were getting corrupted),
-// we encode the audio as base64 and send it as a JSON text message.
-// This is 100% reliable through any WebSocket relay.
+// ─── Live Voice (real-time streaming via binary WS) ──────────
+// Audio is captured in real-time, sent as binary WebSocket frames,
+// relayed by the C++ server to all other clients instantly.
+// This is the "old approach" — direct live voice like a phone call.
 
-const recordBtn = document.getElementById('record-btn');
-let isRecording = false;
-let mediaRecorder = null;
-let audioChunks = [];
-let recordTimer = null;
-let recordSeconds = 0;
+const micBtn = document.getElementById('record-btn');
+const micLabel = document.querySelector('#record-btn');
+let voiceActive = false;
+let audioContext = null;
+let mediaStream = null;
+let processor = null;
+let playbackContext = null;
 
-const recIndicator = document.createElement('div');
-recIndicator.className = 'recording-indicator';
-recIndicator.innerHTML = '<span class="rec-dot"></span><span>Recording</span><span class="rec-timer">0:00</span>';
-document.body.appendChild(recIndicator);
-
-recordBtn.onclick = async () => {
-    if (isRecording) { stopRecording(); } else { await startRecording(); }
+micBtn.onclick = async () => {
+    if (voiceActive) { stopVoice(); } else { await startVoice(); }
 };
 
-async function startRecording() {
+async function startVoice() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(mediaStream);
         
-        // Try different mimeTypes for browser compatibility
-        let mimeType = 'audio/webm';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/ogg';
-            if (!MediaRecorder.isTypeSupported(mimeType)) {
-                mimeType = 'audio/mp4';
-                if (!MediaRecorder.isTypeSupported(mimeType)) {
-                    mimeType = '';  // let browser choose
-                }
+        // Use ScriptProcessor for real-time audio chunks
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0);
+            // Convert Float32 to Int16 for compact transmission
+            const int16 = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
-        }
-        
-        mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-        audioChunks = [];
-        recordSeconds = 0;
-        
-        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-            
-            // Convert to base64 and send as text message
-            const reader = new FileReader();
-            reader.onload = () => {
-                // reader.result is an ArrayBuffer
-                const bytes = new Uint8Array(reader.result);
-                // Convert to base64
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) {
-                    binary += String.fromCharCode(bytes[i]);
-                }
-                const base64 = btoa(binary);
-                
-                // Send as a JSON text message (not binary!)
-                const name = nameInput.value.trim() || 'guest';
-                send({
-                    type: 'voice-message',
-                    name: name,
-                    audio: base64,
-                    mimeType: blob.type,
-                    duration: recordSeconds
-                });
-                
-                // Show in our own chat
-                addVoiceMessage('sent', name, blob, recordSeconds);
-            };
-            reader.readAsArrayBuffer(blob);
-            stream.getTracks().forEach(t => t.stop());
+            // Send as binary WebSocket frame — C++ relay forwards to other clients
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(int16.buffer);
+            }
         };
+        source.connect(processor);
+        processor.connect(audioContext.destination);
         
-        mediaRecorder.start();
-        isRecording = true;
-        recordBtn.classList.add('recording');
-        recIndicator.classList.add('active');
-        recordTimer = setInterval(() => {
-            recordSeconds++;
-            const m = Math.floor(recordSeconds / 60);
-            const s = (recordSeconds % 60).toString().padStart(2, '0');
-            recIndicator.querySelector('.rec-timer').textContent = `${m}:${s}`;
-        }, 1000);
+        voiceActive = true;
+        micBtn.classList.add('recording');
+        micBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg> <span>Leave Voice</span>';
+        send({ type: 'voice-start' });
+        addChatMessage('system', null, '🎤 Voice started — speak now');
     } catch (e) {
         alert('Microphone access denied: ' + e.message);
     }
 }
 
-function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-    isRecording = false;
-    recordBtn.classList.remove('recording');
-    recIndicator.classList.remove('active');
-    clearInterval(recordTimer);
+function stopVoice() {
+    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    if (audioContext) { audioContext.close(); audioContext = null; }
+    if (processor) { processor.disconnect(); processor = null; }
+    voiceActive = false;
+    micBtn.classList.remove('recording');
+    micBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg> <span>Join Voice</span>';
+    send({ type: 'voice-stop' });
+    addChatMessage('system', null, '🔇 Voice stopped');
 }
 
-function addVoiceMessage(type, name, blob, duration) {
-    const div = document.createElement('div');
-    div.className = `voice-msg ${type}`;
-    const url = URL.createObjectURL(blob);
-
-    const m = Math.floor(duration / 60);
-    const s = (duration % 60).toString().padStart(2, '0');
-    const numBars = 24;
-    let barsHtml = '';
-    for (let i = 0; i < numBars; i++) {
-        const h = Math.floor(Math.random() * 16) + 4;
-        barsHtml += `<div class="bar" style="height:${h}px"></div>`;
+// Receive live voice data from other clients (binary frames)
+function handleVoiceData(arrayBuffer) {
+    // The C++ relay forwarded this binary frame to us.
+    // It contains Int16 audio samples from another client's microphone.
+    if (!playbackContext) {
+        playbackContext = new (window.AudioContext || window.webkitAudioContext)();
     }
-
-    // Create audio element in the DOM
-    const audio = document.createElement('audio');
-    audio.src = url;
-    audio.preload = 'auto';
-    audio.style.display = 'none';
-
-    // Get duration from metadata
-    audio.addEventListener('loadedmetadata', () => {
-        const d = audio.duration;
-        if (d && d !== Infinity && d > 0) {
-            const dm = Math.floor(d / 60);
-            const ds = Math.floor(d % 60).toString().padStart(2, '0');
-            div.querySelector('.duration').textContent = `${dm}:${ds}`;
-        }
-    });
-
-    audio.addEventListener('error', () => {
-        console.error('Audio error:', audio.error, 'blob type:', blob.type, 'size:', blob.size);
-    });
-
-    div.innerHTML = `
-        <button class="play-btn">▶</button>
-        <div class="waveform">${barsHtml}</div>
-        <span class="duration">${m}:${s}</span>
-    `;
-    div.appendChild(audio);
-
-    const playBtn = div.querySelector('.play-btn');
-    const bars = div.querySelectorAll('.bar');
-
-    playBtn.addEventListener('click', () => {
-        if (audio.paused) {
-            audio.play().then(() => {
-                playBtn.textContent = '⏸';
-            }).catch(e => {
-                console.error('Play failed:', e);
-                // Reload and try again
-                audio.load();
-                setTimeout(() => {
-                    audio.play().then(() => { playBtn.textContent = '⏸'; })
-                    .catch(e2 => { console.error('Still failed:', e2); });
-                }, 200);
-            });
-            // Animate waveform
-            let i = 0;
-            const barInterval = setInterval(() => {
-                if (i < bars.length) bars[i].classList.add('played');
-                i++;
-                if (i >= bars.length) clearInterval(barInterval);
-            }, Math.max(80, (duration * 1000) / bars.length));
-            audio.onended = () => {
-                playBtn.textContent = '▶';
-                bars.forEach(b => b.classList.remove('played'));
-            };
-        } else {
-            audio.pause();
-            playBtn.textContent = '▶';
-        }
-    });
-
-    if (type === 'received') {
-        const fromDiv = document.createElement('span');
-        fromDiv.className = 'from';
-        fromDiv.style.color = colorFor(name);
-        fromDiv.textContent = name;
-        div.insertBefore(fromDiv, div.firstChild);
+    const int16 = new Int16Array(arrayBuffer);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 0x8000;
     }
-
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    const buffer = playbackContext.createBuffer(1, float32.length, 44100);
+    buffer.getChannelData(0).set(float32);
+    const src = playbackContext.createBufferSource();
+    src.buffer = buffer;
+    src.connect(playbackContext.destination);
+    src.start();
 }
 
 // ─── Users ──────────────────────────────────────
@@ -255,7 +148,7 @@ function updateUserList() {
     Object.entries(knownUsers).forEach(([id, info]) => {
         const div = document.createElement('div');
         div.className = 'user-item';
-        div.innerHTML = `<div class="avatar" style="background:${colorFor(id)}">${initials(info.name)}</div><span class="name">${escapeHtml(info.name)}</span><span class="indicator"></span>`;
+        div.innerHTML = `<div class="avatar" style="background:${colorFor(id)}">${initials(info.name)}</div><span class="name">${escapeHtml(info.name)}</span><span class="indicator" style="background:${info.voice ? 'var(--orange)' : 'var(--green)'}"></span>`;
         usersList.appendChild(div);
     });
 }
@@ -264,12 +157,12 @@ function handleMessage(msg) {
     switch (msg.type) {
         case 'welcome':
             myId = msg.id;
-            knownUsers[myId] = { name: nameInput.value || 'me' };
+            knownUsers[myId] = { name: nameInput.value || 'me', voice: false };
             send({ type: 'set-name', name: nameInput.value.trim() || 'guest' });
             updateUserList();
             break;
         case 'user-joined':
-            if (msg.id !== myId) { knownUsers[msg.id] = { name: msg.id }; addChatMessage('system', null, `${msg.id} joined`); updateUserList(); }
+            if (msg.id !== myId) { knownUsers[msg.id] = { name: msg.id, voice: false }; addChatMessage('system', null, `${msg.id} joined`); updateUserList(); }
             break;
         case 'user-left':
             delete knownUsers[msg.id];
@@ -283,18 +176,15 @@ function handleMessage(msg) {
         case 'chat':
             addChatMessage('received', msg.name, msg.text);
             break;
-        case 'voice-message':
-            // Decode base64 audio data
-            try {
-                const binary = atob(msg.audio);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                const blob = new Blob([bytes], { type: msg.mimeType || 'audio/webm' });
-                addVoiceMessage('received', msg.name || 'voice', blob, msg.duration || 0);
-            } catch (e) {
-                console.error('Voice decode error:', e);
-                addChatMessage('system', null, 'Voice message could not be decoded');
-            }
+        case 'voice-start':
+            if (knownUsers[msg.id]) knownUsers[msg.id].voice = true;
+            addChatMessage('system', null, `🎤 ${msg.id} joined voice`);
+            updateUserList();
+            break;
+        case 'voice-stop':
+            if (knownUsers[msg.id]) knownUsers[msg.id].voice = false;
+            addChatMessage('system', null, `🔇 ${msg.id} left voice`);
+            updateUserList();
             break;
         case 'code-edit':
             applyRemoteEdit(msg);
@@ -354,7 +244,6 @@ function updateRemoteCursor(clientId, line, ch) {
     remoteCursors[clientId] = editor.setBookmark({line, ch}, {widget: el});
 }
 
-// Language + preview tabs
 document.getElementById('language-select').onchange = (e) => editor.setOption('mode', e.target.value);
 const codeTab = document.getElementById('code-tab');
 const previewTab = document.getElementById('preview-tab');
