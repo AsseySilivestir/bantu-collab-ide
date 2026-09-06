@@ -1,45 +1,30 @@
-// ════════════════════════════════════════════════════════════════════
-//  Splannes Thumb Pal — Collaborative IDE
-//  Chat + Voice + Real-time Code Editing via WebSocket
-// ════════════════════════════════════════════════════════════════════
+// Splannes Thumb Pal — Collaborative IDE
+// Chat (text + voice messages) + Real-time Code Editing
 
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${wsProtocol}//${location.host}/`);
 ws.binaryType = 'arraybuffer';
 
-const connStatus = document.getElementById('conn-status');
-const connDot = connStatus.querySelector('.dot');
-const connText = connStatus.querySelector('.conn-text');
-
-ws.onopen = () => {
-    connDot.className = 'dot connected';
-    connText.textContent = 'Connected';
-};
-ws.onclose = () => {
-    connDot.className = 'dot disconnected';
-    connText.textContent = 'Disconnected';
-};
+const connDot = document.querySelector('#conn-status .dot');
+const connText = document.querySelector('#conn-status .conn-text');
+ws.onopen = () => { connDot.className = 'dot connected'; connText.textContent = 'Connected'; };
+ws.onclose = () => { connDot.className = 'dot disconnected'; connText.textContent = 'Disconnected'; };
 ws.onerror = () => { connText.textContent = 'Error'; };
-
 ws.onmessage = (e) => {
-    if (e.data instanceof ArrayBuffer) { handleVoiceData(e.data); return; }
+    if (e.data instanceof ArrayBuffer) { handleBinaryMessage(e.data); return; }
     try { handleMessage(JSON.parse(e.data)); }
     catch { addChatMessage('system', null, e.data); }
 };
+function send(msg) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
 
-function send(msg) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
-
-// ─── Chat ────────────────────────────────────────
+// Chat
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 const nameInput = document.getElementById('name-input');
 const myAvatar = document.getElementById('my-avatar');
-
 const colors = ['#6c5ce7','#00d4a0','#ff6b81','#ffa502','#3742fa','#a29bfe','#fd79a8','#55efc4'];
-function colorFor(id) { return colors[((id || '').charCodeAt((id || '').length-1) || 0) % colors.length]; }
+function colorFor(id) { if(!id) return colors[0]; return colors[id.charCodeAt(id.length-1) % colors.length]; }
 function initials(name) { return (name || '?').substring(0,2).toUpperCase(); }
 
 function addChatMessage(type, name, text) {
@@ -49,14 +34,16 @@ function addChatMessage(type, name, text) {
         div.textContent = text;
     } else if (type === 'sent') {
         div.className = 'chat-msg sent';
-        div.innerHTML = `<span class="from">${name}</span>${text}`;
+        div.innerHTML = `<span class="from">${name}</span>${escapeHtml(text)}`;
     } else {
         div.className = 'chat-msg received';
-        div.innerHTML = `<span class="from" style="color:${colorFor(name)}">${name}</span>${text}`;
+        div.innerHTML = `<span class="from" style="color:${colorFor(name)}">${escapeHtml(name)}</span>${escapeHtml(text)}`;
     }
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
+
+function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function sendChat() {
     const text = chatInput.value.trim();
@@ -67,7 +54,6 @@ function sendChat() {
     addChatMessage('sent', name, text);
     chatInput.value = '';
 }
-
 chatSend.onclick = sendChat;
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 nameInput.addEventListener('input', () => {
@@ -76,26 +62,153 @@ nameInput.addEventListener('input', () => {
     send({ type: 'set-name', name });
 });
 
+// ─── Voice messages (WhatsApp-style: record → send → playback) ───────
+const recordBtn = document.getElementById('record-btn');
+let isRecording = false;
+let mediaRecorder = null;
+let audioChunks = [];
+let recordTimer = null;
+let recordSeconds = 0;
+
+// Recording indicator element
+const recIndicator = document.createElement('div');
+recIndicator.className = 'recording-indicator';
+recIndicator.innerHTML = '<span class="rec-dot"></span><span>Recording</span><span class="rec-timer">0:00</span>';
+document.body.appendChild(recIndicator);
+
+recordBtn.onclick = async () => {
+    if (isRecording) { stopRecording(); } else { await startRecording(); }
+};
+
+async function startRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        recordSeconds = 0;
+        
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onload = () => {
+                // Send as binary WebSocket frame with a header byte
+                // Byte 0: 0xFF = voice message (vs live audio)
+                const audioData = new Uint8Array(reader.result);
+                const framed = new Uint8Array(audioData.length + 1);
+                framed[0] = 0xFF; // voice message marker
+                framed.set(audioData, 1);
+                if (ws.readyState === WebSocket.OPEN) ws.send(framed.buffer);
+                
+                // Show in our own chat
+                const duration = recordSeconds;
+                addVoiceMessage('sent', nameInput.value || 'me', blob, duration);
+            };
+            reader.readAsArrayBuffer(blob);
+            stream.getTracks().forEach(t => t.stop());
+        };
+        
+        mediaRecorder.start();
+        isRecording = true;
+        recordBtn.classList.add('recording');
+        recIndicator.classList.add('active');
+        
+        recordTimer = setInterval(() => {
+            recordSeconds++;
+            const m = Math.floor(recordSeconds / 60);
+            const s = recordSeconds % 60;
+            recIndicator.querySelector('.rec-timer').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+        }, 1000);
+    } catch (e) {
+        alert('Microphone access denied: ' + e.message);
+    }
+}
+
+function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+    isRecording = false;
+    recordBtn.classList.remove('recording');
+    recIndicator.classList.remove('active');
+    clearInterval(recordTimer);
+}
+
+function addVoiceMessage(type, name, blob, duration) {
+    const div = document.createElement('div');
+    div.className = `voice-msg ${type}`;
+    const url = URL.createObjectURL(blob);
+    const m = Math.floor(duration / 60);
+    const s = (duration % 60).toString().padStart(2, '0');
+    const numBars = 20;
+    let barsHtml = '';
+    for (let i = 0; i < numBars; i++) {
+        const h = Math.floor(Math.random() * 16) + 4;
+        barsHtml += `<div class="bar" style="height:${h}px"></div>`;
+    }
+    div.innerHTML = `
+        <button class="play-btn" onclick="this._play(this)">▶</button>
+        <div class="waveform">${barsHtml}</div>
+        <span class="duration">${m}:${s}</span>
+    `;
+    div._audio = new Audio(url);
+    div._play = (btn) => {
+        const audio = div._audio;
+        if (audio.paused) {
+            audio.play();
+            btn.textContent = '⏸';
+            const bars = div.querySelectorAll('.bar');
+            let i = 0;
+            const interval = setInterval(() => {
+                if (i < bars.length) bars[i].classList.add('played');
+                i++;
+                if (i >= bars.length) clearInterval(interval);
+            }, (duration * 1000) / bars.length);
+            audio.onended = () => { btn.textContent = '▶'; bars.forEach(b => b.classList.remove('played')); };
+        } else {
+            audio.pause();
+            btn.textContent = '▶';
+        }
+    };
+    
+    if (type === 'received') {
+        const fromDiv = document.createElement('span');
+        fromDiv.className = 'from';
+        fromDiv.style.color = colorFor(name);
+        fromDiv.textContent = name;
+        div.insertBefore(fromDiv, div.firstChild);
+    }
+    
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Handle incoming binary (voice message or live audio)
+function handleBinaryMessage(buf) {
+    const data = new Uint8Array(buf);
+    // Check for voice message marker (0xFF first byte)
+    if (data[0] === 0xFF) {
+        // Voice message — strip the marker byte
+        const audioData = data.slice(1);
+        const blob = new Blob([audioData], { type: 'audio/webm' });
+        addVoiceMessage('received', 'voice', blob, Math.ceil(audioData.length / 8000));
+    }
+    // Otherwise ignore (no live audio in this version)
+}
+
 // ─── Users ──────────────────────────────────────
 const usersList = document.getElementById('users-list');
 const userCount = document.getElementById('user-count');
-const voiceParticipants = document.getElementById('voice-participants');
 let knownUsers = {};
 let myId = null;
 
 function updateUserList() {
     usersList.innerHTML = '';
-    const count = Object.keys(knownUsers).length;
-    userCount.textContent = count;
+    userCount.textContent = Object.keys(knownUsers).length;
     Object.entries(knownUsers).forEach(([id, info]) => {
         const div = document.createElement('div');
         div.className = 'user-item';
-        const color = colorFor(id);
-        div.innerHTML = `
-            <div class="avatar" style="background:${color}">${initials(info.name)}</div>
-            <span class="name">${info.name}</span>
-            ${info.voice ? '<span class="indicator voice"></span>' : '<span class="indicator"></span>'}
-        `;
+        div.innerHTML = `<div class="avatar" style="background:${colorFor(id)}">${initials(info.name)}</div><span class="name">${escapeHtml(info.name)}</span><span class="indicator"></span>`;
         usersList.appendChild(div);
     });
 }
@@ -104,24 +217,17 @@ function handleMessage(msg) {
     switch (msg.type) {
         case 'welcome':
             myId = msg.id;
-            knownUsers[myId] = { name: nameInput.value || 'me', voice: false };
-            const name = nameInput.value.trim() || 'guest';
-            send({ type: 'set-name', name });
+            knownUsers[myId] = { name: nameInput.value || 'me' };
+            send({ type: 'set-name', name: nameInput.value.trim() || 'guest' });
             updateUserList();
             break;
         case 'user-joined':
-            if (msg.id !== myId) {
-                knownUsers[msg.id] = { name: msg.id, voice: false };
-                addChatMessage('system', null, `${msg.id} joined`);
-                updateUserList();
-            }
+            if (msg.id !== myId) { knownUsers[msg.id] = { name: msg.id }; addChatMessage('system', null, `${msg.id} joined`); updateUserList(); }
             break;
         case 'user-left':
             delete knownUsers[msg.id];
             addChatMessage('system', null, `${msg.id} left`);
             updateUserList();
-            const pill = document.querySelector(`[data-voice="${msg.id}"]`);
-            if (pill) pill.remove();
             break;
         case 'name-change':
             if (knownUsers[msg.id]) knownUsers[msg.id].name = msg.name;
@@ -129,17 +235,6 @@ function handleMessage(msg) {
             break;
         case 'chat':
             addChatMessage('received', msg.name, msg.text);
-            break;
-        case 'voice-start':
-            if (knownUsers[msg.id]) knownUsers[msg.id].voice = true;
-            addVoicePill(msg.id, knownUsers[msg.id]?.name || msg.id);
-            updateUserList();
-            break;
-        case 'voice-stop':
-            if (knownUsers[msg.id]) knownUsers[msg.id].voice = false;
-            const vp = document.querySelector(`[data-voice="${msg.id}"]`);
-            if (vp) vp.remove();
-            updateUserList();
             break;
         case 'code-edit':
             applyRemoteEdit(msg.changes);
@@ -150,102 +245,28 @@ function handleMessage(msg) {
     }
 }
 
-// ─── Voice ───────────────────────────────────────
-const micBtn = document.getElementById('mic-btn');
-const micLabel = document.getElementById('mic-label');
-let voiceActive = false;
-let audioContext = null;
-let mediaStream = null;
-let processor = null;
-
-micBtn.onclick = async () => {
-    if (voiceActive) stopVoice();
-    else await startVoice();
-};
-
-async function startVoice() {
-    try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioContext.createMediaStreamSource(mediaStream);
-        processor = audioContext.createScriptProcessor(4096, 1, 1);
-        processor.onaudioprocess = (e) => {
-            const inputData = e.inputBuffer.getChannelData(0);
-            const int16 = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[i]));
-                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            if (ws.readyState === WebSocket.OPEN) ws.send(int16.buffer);
-        };
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-        voiceActive = true;
-        micBtn.classList.add('active');
-        micLabel.textContent = 'Leave Voice';
-        send({ type: 'voice-start' });
-        if (myId) addVoicePill(myId, nameInput.value || 'me');
-    } catch (e) {
-        alert('Microphone access denied: ' + e.message);
-    }
-}
-
-function stopVoice() {
-    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-    if (audioContext) { audioContext.close(); audioContext = null; }
-    if (processor) { processor.disconnect(); processor = null; }
-    voiceActive = false;
-    micBtn.classList.remove('active');
-    micLabel.textContent = 'Join Voice';
-    send({ type: 'voice-stop' });
-    if (myId) { const p = document.querySelector(`[data-voice="${myId}"]`); if (p) p.remove(); }
-}
-
-function addVoicePill(id, name) {
-    if (document.querySelector(`[data-voice="${id}"]`)) return;
-    const pill = document.createElement('div');
-    pill.className = 'voice-pill';
-    pill.dataset.voice = id;
-    pill.textContent = name;
-    voiceParticipants.appendChild(pill);
-}
-
-// Voice playback
-let playbackCtx = null;
-function handleVoiceData(buf) {
-    if (!playbackCtx) playbackCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const int16 = new Int16Array(buf);
-    const f32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 0x8000;
-    const buffer = playbackCtx.createBuffer(1, f32.length, 44100);
-    buffer.getChannelData(0).set(f32);
-    const src = playbackCtx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(playbackCtx.destination);
-    src.start();
-}
-
-// ─── CodeMirror ──────────────────────────────────
+// ─── CodeMirror with content-snapshot sync ──────
 const editor = CodeMirror.fromTextArea(document.getElementById('code-editor'), {
-    mode: 'javascript',
-    theme: 'material-darker',
-    lineNumbers: true,
-    autoCloseTags: true,
-    autoCloseBrackets: true,
-    tabSize: 2,
-    indentUnit: 2,
-    value: '// Splannes Thumb Pal — Collaborative IDE\n// Start typing — changes sync in real-time!\n\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}\n\nconsole.log(greet("World"));\n'
+    mode: 'javascript', theme: 'material-darker', lineNumbers: true,
+    autoCloseTags: true, autoCloseBrackets: true, tabSize: 2, indentUnit: 2,
+    value: '// Splannes Thumb Pal\n// Type and watch it sync in real-time!\n\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}\n\nconsole.log(greet("World"));\n'
 });
 
 let sendTimeout = null;
 let isApplyingRemote = false;
+let lastSentContent = editor.getValue();
 
-editor.on('change', (inst, changes) => {
+// Send full content snapshot (not delta) — more reliable for sync
+editor.on('change', (inst) => {
     if (isApplyingRemote) return;
     if (sendTimeout) clearTimeout(sendTimeout);
     sendTimeout = setTimeout(() => {
-        send({ type: 'code-edit', changes: JSON.stringify(changes) });
-    }, 100);
+        const content = inst.getValue();
+        if (content !== lastSentContent) {
+            send({ type: 'code-edit', content: content });
+            lastSentContent = content;
+        }
+    }, 300);
 });
 
 editor.on('cursorActivity', (inst) => {
@@ -254,44 +275,46 @@ editor.on('cursorActivity', (inst) => {
     send({ type: 'cursor', line: pos.line, ch: pos.ch });
 });
 
-function applyRemoteEdit(changesStr) {
-    try {
-        const changes = JSON.parse(changesStr);
-        isApplyingRemote = true;
-        if (Array.isArray(changes)) {
-            changes.forEach(c => editor.replaceRange(c.text, c.from, c.to));
-        } else if (changes.text) {
-            editor.replaceRange(changes.text, changes.from, changes.to);
-        }
-        isApplyingRemote = false;
-    } catch { isApplyingRemote = false; }
+function applyRemoteEdit(data) {
+    if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch { return; }
+    }
+    isApplyingRemote = true;
+    if (data.content !== undefined) {
+        // Full content snapshot — replace the entire editor content
+        const cursor = editor.getCursor();
+        editor.setValue(data.content);
+        editor.setCursor(cursor);
+        lastSentContent = data.content;
+    } else if (data.changes) {
+        // Legacy delta-based sync (fallback)
+        try {
+            const changes = JSON.parse(data.changes);
+            if (Array.isArray(changes)) {
+                changes.forEach(c => editor.replaceRange(c.text, c.from, c.to));
+            } else if (changes.text) {
+                editor.replaceRange(changes.text, changes.from, changes.to);
+            }
+        } catch {}
+    }
+    isApplyingRemote = false;
 }
 
 const remoteCursors = {};
 function updateRemoteCursor(clientId, line, ch) {
     if (clientId === myId) return;
     if (remoteCursors[clientId]) remoteCursors[clientId].clear();
-    const color = colorFor(clientId);
     const el = document.createElement('div');
-    el.style.cssText = `border-left:2px solid ${color};height:1.3em;`;
+    el.style.cssText = `border-left:2px solid ${colorFor(clientId)};height:1.3em;`;
     remoteCursors[clientId] = editor.setBookmark({line, ch}, {widget: el});
 }
 
-// Language selector + Preview tab
+// Language + preview tabs
 document.getElementById('language-select').onchange = (e) => editor.setOption('mode', e.target.value);
-
 const codeTab = document.getElementById('code-tab');
 const previewTab = document.getElementById('preview-tab');
 const editorWrapper = document.getElementById('editor-wrapper');
 const previewWrapper = document.getElementById('preview-wrapper');
 const previewFrame = document.getElementById('preview-frame');
-
-codeTab.onclick = () => {
-    codeTab.classList.add('active'); previewTab.classList.remove('active');
-    editorWrapper.style.display = ''; previewWrapper.style.display = 'none';
-};
-previewTab.onclick = () => {
-    previewTab.classList.add('active'); codeTab.classList.remove('active');
-    editorWrapper.style.display = 'none'; previewWrapper.style.display = '';
-    previewFrame.srcdoc = editor.getValue();
-};
+codeTab.onclick = () => { codeTab.classList.add('active'); previewTab.classList.remove('active'); editorWrapper.style.display=''; previewWrapper.style.display='none'; };
+previewTab.onclick = () => { previewTab.classList.add('active'); codeTab.classList.remove('active'); editorWrapper.style.display='none'; previewWrapper.style.display=''; previewFrame.srcdoc = editor.getValue(); };
