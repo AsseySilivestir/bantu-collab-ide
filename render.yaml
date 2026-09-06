@@ -1,20 +1,13 @@
 # Render Blueprint — Bantu Collaborative IDE
 # Docs: https://render.com/docs/blueprint-spec
 #
-# Deploys the bantu-collab-ide as a Docker web service on Render.
-# The Dockerfile builds Bantu v1.3.2 from source (including sua.ws
-# WebSocket support) and runs the IDE server.
-#
 services:
   - type: web
     name: bantu-collab-ide
     runtime: docker
     plan: free
-    region: ohio   # change to a region near your users
+    region: ohio
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /
+    healthCheckPath: /api/health
     autoDeploy: true
-    envVars:
-      - key: PORT
-        value: 8080

@@ -1,9 +1,5 @@
 # ════════════════════════════════════════════════════════════════════
 #  Bantu Collaborative IDE — Multi-stage Dockerfile for Render
-#  ════════════════════════════════════════════════════════════════════
-#
-#  Stage 1: build the Bantu interpreter v1.3.2 from source
-#  Stage 2: runtime — Bantu binary + the IDE app (server.b + public/)
 # ════════════════════════════════════════════════════════════════════
 
 # ─── Stage 1: Builder ──────────────────────────────────────────────
@@ -19,7 +15,6 @@ RUN apt-get update \
 
 WORKDIR /build
 
-# Copy the Bantu interpreter source (vendored from AsseySilivestir/Bantu)
 COPY bantu-src/compiler/ /build/compiler/
 
 RUN cd /build/compiler \
@@ -34,7 +29,6 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
-ENV PORT=8080
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -43,18 +37,14 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Copy the Bantu binary
 COPY --from=builder /build/bantu /usr/local/bin/bantu
 RUN chmod +x /usr/local/bin/bantu
 
-# Copy the IDE app
 COPY server.b /app/server.b
 COPY public/  /app/public/
 
-# Verify Bantu works
+# Verify Bantu works before starting
 RUN /usr/local/bin/bantu --version
 
-# Render injects $PORT. Bantu listens on it.
-EXPOSE 8080
-
+# Render sets PORT automatically — Bantu reads it via env("PORT")
 CMD ["bantu", "run", "server.b"]

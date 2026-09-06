@@ -130,7 +130,13 @@ sua.ws.on("disconnect", def($client) {
 // ─── Serve the IDE frontend ────────────────────────────────────────
 sua.server.static("./public");
 
+// ─── Health check endpoint (for Render) ───────────────────────────
+sua.server.get("/api/health", def($req, $res) {
+    $res.json({"status": "ok", "version": "1.3.2", "ws": true});
+});
+
 // ─── Start ────────────────────────────────────────────────────────
+// Render automatically sets the PORT env var. Read it.
 string $port = env("PORT");
 if (!$port) { $port = "8080"; }
 
