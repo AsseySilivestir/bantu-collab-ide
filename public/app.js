@@ -17,7 +17,7 @@ ws.onmessage = (e) => {
 };
 function send(msg) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
 
-// Chat
+// ─── Chat ───────────────────────────────────────
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
@@ -26,15 +26,15 @@ const myAvatar = document.getElementById('my-avatar');
 const colors = ['#6c5ce7','#00d4a0','#ff6b81','#ffa502','#3742fa','#a29bfe','#fd79a8','#55efc4'];
 function colorFor(id) { if(!id) return colors[0]; return colors[id.charCodeAt(id.length-1) % colors.length]; }
 function initials(name) { return (name || '?').substring(0,2).toUpperCase(); }
+function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function addChatMessage(type, name, text) {
     const div = document.createElement('div');
     if (type === 'system') {
-        div.className = 'chat-msg system';
-        div.textContent = text;
+        div.className = 'chat-msg system'; div.textContent = text;
     } else if (type === 'sent') {
         div.className = 'chat-msg sent';
-        div.innerHTML = `<span class="from">${name}</span>${escapeHtml(text)}`;
+        div.innerHTML = `<span class="from">${escapeHtml(name)}</span>${escapeHtml(text)}`;
     } else {
         div.className = 'chat-msg received';
         div.innerHTML = `<span class="from" style="color:${colorFor(name)}">${escapeHtml(name)}</span>${escapeHtml(text)}`;
@@ -42,8 +42,6 @@ function addChatMessage(type, name, text) {
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
-
-function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function sendChat() {
     const text = chatInput.value.trim();
@@ -62,7 +60,7 @@ nameInput.addEventListener('input', () => {
     send({ type: 'set-name', name });
 });
 
-// ─── Voice messages (WhatsApp-style: record → send → playback) ───────
+// ─── Voice messages (WhatsApp-style) ────────────
 const recordBtn = document.getElementById('record-btn');
 let isRecording = false;
 let mediaRecorder = null;
@@ -70,7 +68,6 @@ let audioChunks = [];
 let recordTimer = null;
 let recordSeconds = 0;
 
-// Recording indicator element
 const recIndicator = document.createElement('div');
 recIndicator.className = 'recording-indicator';
 recIndicator.innerHTML = '<span class="rec-dot"></span><span>Recording</span><span class="rec-timer">0:00</span>';
@@ -86,48 +83,36 @@ async function startRecording() {
         mediaRecorder = new MediaRecorder(stream);
         audioChunks = [];
         recordSeconds = 0;
-        
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = () => {
             const blob = new Blob(audioChunks, { type: 'audio/webm' });
             const reader = new FileReader();
             reader.onload = () => {
-                // Send as binary WebSocket frame with a header byte
-                // Byte 0: 0xFF = voice message (vs live audio)
                 const audioData = new Uint8Array(reader.result);
                 const framed = new Uint8Array(audioData.length + 1);
-                framed[0] = 0xFF; // voice message marker
+                framed[0] = 0xFF;
                 framed.set(audioData, 1);
                 if (ws.readyState === WebSocket.OPEN) ws.send(framed.buffer);
-                
-                // Show in our own chat
-                const duration = recordSeconds;
-                addVoiceMessage('sent', nameInput.value || 'me', blob, duration);
+                addVoiceMessage('sent', nameInput.value || 'me', blob, recordSeconds);
             };
             reader.readAsArrayBuffer(blob);
             stream.getTracks().forEach(t => t.stop());
         };
-        
         mediaRecorder.start();
         isRecording = true;
         recordBtn.classList.add('recording');
         recIndicator.classList.add('active');
-        
         recordTimer = setInterval(() => {
             recordSeconds++;
             const m = Math.floor(recordSeconds / 60);
-            const s = recordSeconds % 60;
-            recIndicator.querySelector('.rec-timer').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+            const s = (recordSeconds % 60).toString().padStart(2, '0');
+            recIndicator.querySelector('.rec-timer').textContent = `${m}:${s}`;
         }, 1000);
-    } catch (e) {
-        alert('Microphone access denied: ' + e.message);
-    }
+    } catch (e) { alert('Microphone access denied: ' + e.message); }
 }
 
 function stopRecording() {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-        mediaRecorder.stop();
-    }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     isRecording = false;
     recordBtn.classList.remove('recording');
     recIndicator.classList.remove('active');
@@ -138,6 +123,22 @@ function addVoiceMessage(type, name, blob, duration) {
     const div = document.createElement('div');
     div.className = `voice-msg ${type}`;
     const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+
+    // If duration is 0 or unknown, try to get it from the audio metadata
+    if (!duration || duration <= 0) {
+        duration = 0;
+        audio.addEventListener('loadedmetadata', () => {
+            // Some browsers give Infinity for blob duration; fall back to estimate
+            const d = audio.duration;
+            if (d && d !== Infinity) {
+                const m = Math.floor(d / 60);
+                const s = Math.floor(d % 60).toString().padStart(2, '0');
+                div.querySelector('.duration').textContent = `${m}:${s}`;
+            }
+        });
+    }
+
     const m = Math.floor(duration / 60);
     const s = (duration % 60).toString().padStart(2, '0');
     const numBars = 20;
@@ -151,27 +152,29 @@ function addVoiceMessage(type, name, blob, duration) {
         <div class="waveform">${barsHtml}</div>
         <span class="duration">${m}:${s}</span>
     `;
-    div._audio = new Audio(url);
+
     const playBtn = div.querySelector('.play-btn');
+    const bars = div.querySelectorAll('.bar');
     playBtn.addEventListener('click', () => {
-        const audio = div._audio;
         if (audio.paused) {
             audio.play();
             playBtn.textContent = '⏸';
-            const bars = div.querySelectorAll('.bar');
             let i = 0;
             const interval = setInterval(() => {
                 if (i < bars.length) bars[i].classList.add('played');
                 i++;
                 if (i >= bars.length) clearInterval(interval);
-            }, (duration * 1000) / bars.length);
-            audio.onended = () => { playBtn.textContent = '▶'; bars.forEach(b => b.classList.remove('played')); };
+            }, Math.max(100, (duration * 1000) / bars.length));
+            audio.onended = () => {
+                playBtn.textContent = '▶';
+                bars.forEach(b => b.classList.remove('played'));
+            };
         } else {
             audio.pause();
             playBtn.textContent = '▶';
         }
     });
-    
+
     if (type === 'received') {
         const fromDiv = document.createElement('span');
         fromDiv.className = 'from';
@@ -179,22 +182,20 @@ function addVoiceMessage(type, name, blob, duration) {
         fromDiv.textContent = name;
         div.insertBefore(fromDiv, div.firstChild);
     }
-    
+
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Handle incoming binary (voice message or live audio)
 function handleBinaryMessage(buf) {
     const data = new Uint8Array(buf);
-    // Check for voice message marker (0xFF first byte)
-    if (data[0] === 0xFF) {
-        // Voice message — strip the marker byte
+    if (data.length > 0 && data[0] === 0xFF) {
         const audioData = data.slice(1);
         const blob = new Blob([audioData], { type: 'audio/webm' });
-        addVoiceMessage('received', 'voice', blob, Math.ceil(audioData.length / 8000));
+        // Duration unknown for received voice messages — will be detected
+        // from the audio metadata in addVoiceMessage
+        addVoiceMessage('received', 'voice', blob, 0);
     }
-    // Otherwise ignore (no live audio in this version)
 }
 
 // ─── Users ──────────────────────────────────────
@@ -238,7 +239,8 @@ function handleMessage(msg) {
             addChatMessage('received', msg.name, msg.text);
             break;
         case 'code-edit':
-            applyRemoteEdit(msg.changes);
+            // Pass the ENTIRE message object, not just msg.changes
+            applyRemoteEdit(msg);
             break;
         case 'cursor':
             updateRemoteCursor(msg.from, msg.line, msg.ch);
@@ -250,14 +252,13 @@ function handleMessage(msg) {
 const editor = CodeMirror.fromTextArea(document.getElementById('code-editor'), {
     mode: 'javascript', theme: 'material-darker', lineNumbers: true,
     autoCloseTags: true, autoCloseBrackets: true, tabSize: 2, indentUnit: 2,
-    value: '// Splannes Thumb Pal\n// Type and watch it sync in real-time!\n\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}\n\nconsole.log(greet("World"));\n'
+    value: '// Splannes Thumb Pal\n// Type and watch it sync!\n\nfunction greet(name) {\n  return `Hello, ${name}!`;\n}\n\nconsole.log(greet("World"));\n'
 });
 
 let sendTimeout = null;
 let isApplyingRemote = false;
 let lastSentContent = editor.getValue();
 
-// Send full content snapshot (not delta) — more reliable for sync
 editor.on('change', (inst) => {
     if (isApplyingRemote) return;
     if (sendTimeout) clearTimeout(sendTimeout);
@@ -276,21 +277,18 @@ editor.on('cursorActivity', (inst) => {
     send({ type: 'cursor', line: pos.line, ch: pos.ch });
 });
 
-function applyRemoteEdit(data) {
-    if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch { return; }
-    }
+function applyRemoteEdit(msg) {
     isApplyingRemote = true;
-    if (data.content !== undefined) {
-        // Full content snapshot — replace the entire editor content
+    if (msg.content !== undefined) {
+        // Full content snapshot — replace the entire editor
         const cursor = editor.getCursor();
-        editor.setValue(data.content);
+        editor.setValue(msg.content);
         editor.setCursor(cursor);
-        lastSentContent = data.content;
-    } else if (data.changes) {
+        lastSentContent = msg.content;
+    } else if (msg.changes) {
         // Legacy delta-based sync (fallback)
         try {
-            const changes = JSON.parse(data.changes);
+            const changes = typeof msg.changes === 'string' ? JSON.parse(msg.changes) : msg.changes;
             if (Array.isArray(changes)) {
                 changes.forEach(c => editor.replaceRange(c.text, c.from, c.to));
             } else if (changes.text) {
